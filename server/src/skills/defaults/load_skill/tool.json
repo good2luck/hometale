@@ -1,0 +1,14 @@
+{
+  "name": "load_skill",
+  "description": "加载指定 Skill 的详细使用说明和工作流指南。当你需要了解某个技能的完整使用方法时调用此工具。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "skill_id": {
+        "type": "string",
+        "description": "要加载的 Skill ID，例如 search_memory、calculate 等"
+      }
+    },
+    "required": ["skill_id"]
+  }
+}

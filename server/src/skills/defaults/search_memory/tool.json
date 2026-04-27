@@ -1,0 +1,19 @@
+{
+  "name": "search_memory",
+  "description": "在当前角色的记忆文件中搜索关键词",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "keyword": {
+        "type": "string",
+        "description": "要搜索的关键词"
+      },
+      "limit": {
+        "type": "number",
+        "description": "最多返回多少条结果，默认 10",
+        "default": 10
+      }
+    },
+    "required": ["keyword"]
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "name": "@hometale/cli",
+  "version": "0.1.0",
+  "description": "HomeTale - 家的故事，家庭智能体",
+  "keywords": [
+    "home",
+    "family",
+    "ai",
+    "agent",
+    "chatbot"
+  ],
+  "author": "HomeTale Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hometale/hometale.git"
+  },
+  "homepage": "https://hometale.org",
+  "bugs": "https://github.com/hometale/hometale/issues",
+  "type": "module",
+  "bin": {
+    "hometale": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "prepublishOnly": "echo '请运行 ./scripts/prepublish.sh 后再发布'"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.77",
+    "@ai-sdk/openai-compatible": "^1.0.36",
+    "ai": "^5.0.179",
+    "better-sqlite3": "^11.8.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "inquirer": "^12.3.0",
+    "chalk": "^5.4.0",
+    "node-cron": "^3.0.3",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/express-session": "^1.18.1",
+    "@types/node": "^22.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/qrcode-terminal": "^0.12.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "preferGlobal": true
+}

@@ -1,0 +1,20 @@
+{
+  "name": "get_current_time",
+  "description": "获取当前的日期和时间",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "timezone": {
+        "type": "string",
+        "description": "时区，默认 Asia/Shanghai",
+        "default": "Asia/Shanghai"
+      },
+      "format": {
+        "type": "string",
+        "description": "输出格式：full/short/time/date",
+        "enum": ["full", "short", "time", "date"],
+        "default": "full"
+      }
+    }
+  }
+}

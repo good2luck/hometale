@@ -1,0 +1,14 @@
+{
+  "name": "calculate",
+  "description": "执行数学表达式计算，支持加减乘除、括号等",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "expression": {
+        "type": "string",
+        "description": "数学表达式，如：25 * 4 + 10"
+      }
+    },
+    "required": ["expression"]
+  }
+}

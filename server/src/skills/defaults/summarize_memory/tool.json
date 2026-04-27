@@ -1,0 +1,20 @@
+{
+  "name": "summarize_memory",
+  "description": "总结对话记录并更新记忆系统。当用户说\"总结一下\"、\"回顾今天\"、\"更新记忆\"等时使用此工具。",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "description": "要执行的操作。默认使用 summarize_today_and_update。",
+        "enum": ["summarize_today", "summarize_date", "update_long_term", "summarize_today_and_update"],
+        "default": "summarize_today_and_update"
+      },
+      "date": {
+        "type": "string",
+        "description": "指定日期 (YYYY-MM-DD 格式)，仅在 action=summarize_date 时需要"
+      }
+    },
+    "required": []
+  }
+}

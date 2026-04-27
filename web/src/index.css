@@ -1,0 +1,187 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;500;600;700&family=Varela+Round&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: #0D9488;
+  --color-primary-dark: #0F766E;
+  --color-secondary: #14B8A6;
+  --color-cta: #F97316;
+  --color-cta-dark: #EA580C;
+  --color-background: #F0FDFA;
+  --color-text: #134E4A;
+  --color-text-muted: #5D7C78;
+}
+
+* {
+  font-family: 'Nunito Sans', sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Varela Round', sans-serif;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text);
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #A7C4C1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #88A8A4;
+}
+
+/* === Activity Log & Tool/Shell Components === */
+
+/* Code block styling */
+.code-block {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+}
+
+/* Terminal text */
+.terminal-text {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Smooth transitions */
+.activity-log-section {
+  transition: max-height 0.3s ease-out, opacity 0.3s ease-out;
+}
+
+/* Status pulse animation */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+.status-pulse::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: currentColor;
+  animation: pulse-ring 1.5s ease-out infinite;
+  opacity: 0.3;
+}
+
+/* JSON syntax highlighting (basic) */
+.json-key {
+  color: #0550AE;
+}
+
+.json-string {
+  color: #0A3069;
+}
+
+.json-number {
+  color: #079992;
+}
+
+.json-boolean {
+  color: #C01C28;
+}
+
+.json-null {
+  color: #6E7781;
+}
+
+/* Shell output colors */
+.shell-info {
+  color: #3B82F6;
+}
+
+.shell-success {
+  color: #059669;
+}
+
+.shell-warning {
+  color: #D97706;
+}
+
+.shell-error {
+  color: #DC2626;
+}
+
+/* Expand/collapse animation */
+.expand-enter {
+  opacity: 0;
+  max-height: 0;
+}
+
+.expand-enter-active {
+  opacity: 1;
+  max-height: 1000px;
+  transition: opacity 0.3s ease, max-height 0.5s ease;
+}
+
+.expand-exit {
+  opacity: 1;
+  max-height: 1000px;
+}
+
+.expand-exit-active {
+  opacity: 0;
+  max-height: 0;
+  transition: opacity 0.3s ease, max-height 0.5s ease;
+}
+
+/* Copy button feedback */
+.copy-tooltip {
+  animation: fadeInScale 0.15s ease-out;
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Scrollbar for log panels */
+.log-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.log-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 3px;
+}
+
+.log-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+

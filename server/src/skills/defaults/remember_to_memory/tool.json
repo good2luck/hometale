@@ -1,0 +1,14 @@
+{
+  "name": "remember_to_memory",
+  "description": "将内容记录到长期记忆中",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "要记录到长期记忆中的内容"
+      }
+    },
+    "required": ["content"]
+  }
+}

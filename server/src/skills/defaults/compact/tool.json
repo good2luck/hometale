@@ -1,0 +1,17 @@
+{
+  "name": "compact",
+  "description": "手动触发上下文压缩，生成对话总结以节省 token",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "focus": {
+        "type": "string",
+        "description": "压缩时希望保留的重点信息，如 '保留当前任务状态'"
+      },
+      "keepRecent": {
+        "type": "number",
+        "description": "压缩后保留的最近消息数，默认 5"
+      }
+    }
+  }
+}
