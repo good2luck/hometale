@@ -1,6 +1,6 @@
 {
   "name": "@hometale/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "HomeTale - 家的故事，家庭智能体",
   "keywords": [
     "home",
@@ -15,7 +15,7 @@
     "type": "git",
     "url": "git+https://github.com/good2luck/hometale.git"
   },
-  "homepage": "https://hometale.org",
+  "homepage": "https://github.com/good2luck/hometale",
   "bugs": "https://github.com/good2luck/hometale/issues",
   "type": "module",
   "bin": {
