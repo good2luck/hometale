@@ -13,10 +13,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hometale/hometale.git"
+    "url": "git+https://github.com/good2luck/hometale.git"
   },
   "homepage": "https://hometale.org",
-  "bugs": "https://github.com/hometale/hometale/issues",
+  "bugs": "https://github.com/good2luck/hometale/issues",
   "type": "module",
   "bin": {
     "hometale": "dist/index.js"

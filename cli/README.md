@@ -17,19 +17,10 @@ hometale onboard
 ```
 
 配置向导会引导你完成：
-- LLM 模型配置（OpenAI / Anthropic）
-- 微信账号配置（可选）
-- 后台守护进程安装（可选）
+- LLM 模型配置（OpenAI / Anthropic / custom）
+- 微信账号配置（建议y）
+- 后台守护进程安装（建议y）
 
-### 方式二：手动启动
-
-```bash
-# 1. 配置模型
-hometale onboard --model-only
-
-# 2. 启动 Web 服务
-hometale run
-```
 
 ## 命令参考
 
@@ -117,12 +108,25 @@ hometale log --follow
 }
 ```
 
+或使用 自定义模型
+
+```json
+{
+  "model": {
+    "provider": "custom",
+    "apiKey": "sk-your-api-key",
+    "model": "model name",
+    "baseURL": "xxx"
+  }
+}
+```
+
 ## 开发
 
 从源码运行：
 
 ```bash
-git clone https://github.com/hometale/hometale.git
+git clone https://github.com/good2luck/hometale.git
 cd hometale
 npm install
 npm run build
@@ -145,17 +149,7 @@ hometale log            # 查看日志
 rm -rf ~/.hometale
 ```
 
-### 端口被占用
-
-```bash
-PORT=3002 hometale start
-```
 
 ## 更多信息
 
-- [GitHub 仓库](https://github.com/hometale/hometale)
-- [在线文档](https://hometale.org)
-
-## License
-
-MIT
+- [GitHub 仓库](https://github.com/good2luck/hometale)
