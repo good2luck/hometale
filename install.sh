@@ -1,77 +1,108 @@
 #!/bin/bash
 
-# HomeTale 安装和启动脚本
+# HomeTale 一键安装脚本
+# 用法: curl -fsSL https://raw.githubusercontent.com/good2luck/hometale/master/install.sh | bash
+#   或: curl -fsSL https://raw.githubusercontent.com/good2luck/hometale/master/install.sh | bash -s -- --install-daemon
 
 set -e
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="https://github.com/good2luck/hometale.git"
+INSTALL_DIR="$HOME/.hometale-src"
 HOMETALE_DIR="$HOME/.hometale"
+INSTALL_DAEMON=false
+
+# 解析参数
+for arg in "$@"; do
+  case $arg in
+    --install-daemon) INSTALL_DAEMON=true ;;
+  esac
+done
 
 echo "========================================="
-echo "  HomeTale - 家的故事"
+echo "  HomeTale - 家的故事 一键安装"
 echo "========================================="
 echo ""
 
-# 检查 Node.js
+# ── 检查前置依赖 ──
+
 if ! command -v node &> /dev/null; then
-    echo "❌ 错误: 未找到 Node.js，请先安装 Node.js"
+    echo "❌ 错误: 未找到 Node.js，请先安装 Node.js 18+"
+    echo "   https://nodejs.org/"
     exit 1
 fi
 
-NODE_VERSION=$(node -v)
-echo "✓ Node.js 版本: $NODE_VERSION"
+NODE_MAJOR=$(node -v | sed 's/v\([0-9]*\).*/\1/')
+if [ "$NODE_MAJOR" -lt 18 ]; then
+    echo "❌ 错误: Node.js 版本过低 ($(node -v))，需要 18+"
+    exit 1
+fi
+echo "✓ Node.js $(node -v)"
 
-# 检查 npm
 if ! command -v npm &> /dev/null; then
     echo "❌ 错误: 未找到 npm"
     exit 1
 fi
+echo "✓ npm $(npm -v)"
+
+if ! command -v git &> /dev/null; then
+    echo "❌ 错误: 未找到 git，请先安装 git"
+    exit 1
+fi
+echo "✓ git $(git --version 2>&1 | awk '{print $3}')"
 
 echo ""
-echo "========================================="
-echo "  安装依赖..."
-echo "========================================="
+
+# ── 克隆仓库 ──
+
+if [ -d "$INSTALL_DIR" ]; then
+    echo "→ 更新已有源码: $INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    git pull --ff-only || {
+        echo "⚠️  git pull 失败，重新克隆..."
+        rm -rf "$INSTALL_DIR"
+        git clone "$REPO_URL" "$INSTALL_DIR"
+        cd "$INSTALL_DIR"
+    }
+else
+    echo "→ 克隆仓库: $REPO_URL"
+    git clone "$REPO_URL" "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+fi
+
 echo ""
 
-# 安装根目录依赖
-echo "→ 安装根目录依赖..."
-cd "$PROJECT_DIR"
+# ── 安装依赖 ──
+
+echo "→ 安装依赖..."
 npm install
 
-# 安装 server 依赖
-echo ""
-echo "→ 安装 server 依赖..."
-cd "$PROJECT_DIR/server"
-npm install
-
-# 安装 cli 依赖
-echo ""
-echo "→ 安装 cli 依赖..."
-cd "$PROJECT_DIR/cli"
-npm install
-
-# 安装 web 依赖
-echo ""
-echo "→ 安装 web 依赖..."
-cd "$PROJECT_DIR/web"
-npm install
-
-echo ""
-echo "========================================="
-echo "  初始化配置..."
-echo "========================================="
 echo ""
 
-# 创建 ~/.hometale 目录和默认配置
+# ── 构建 ──
+
+echo "→ 构建项目..."
+npm run build
+
+echo ""
+
+# ── 链接 CLI ──
+
+echo "→ 链接 hometale 命令..."
+cd "$INSTALL_DIR/cli"
+npm link 2>/dev/null || sudo npm link
+
+echo ""
+
+# ── 初始化配置 ──
+
 if [ ! -d "$HOMETALE_DIR" ]; then
     mkdir -p "$HOMETALE_DIR"
     echo "✓ 创建目录: $HOMETALE_DIR"
 fi
 
-# 创建默认 config.json（如果不存在）
 CONFIG_FILE="$HOMETALE_DIR/config.json"
 if [ ! -f "$CONFIG_FILE" ]; then
-    cat > "$CONFIG_FILE" << EOF
+    cat > "$CONFIG_FILE" << 'EOF'
 {
   "model": {
     "provider": "openai",
@@ -82,9 +113,18 @@ if [ ! -f "$CONFIG_FILE" ]; then
 }
 EOF
     echo "✓ 创建配置文件: $CONFIG_FILE"
-    echo ""
-    echo "⚠️  请编辑 $CONFIG_FILE 配置你的 API Key"
-    echo ""
+fi
+
+echo ""
+
+# ── 运行 onboard ──
+
+if [ "$INSTALL_DAEMON" = true ]; then
+    echo "→ 运行配置向导并启动守护进程..."
+    hometale onboard --install-daemon
+else
+    echo "→ 运行配置向导..."
+    hometale onboard
 fi
 
 echo ""
@@ -92,33 +132,16 @@ echo "========================================="
 echo "  安装完成！"
 echo "========================================="
 echo ""
-echo "使用说明："
+echo "常用命令："
+echo "  hometale              # 进入交互式对话"
+echo "  hometale chat         # 同上"
+echo "  hometale run          # 启动 Web 服务器（前台）"
+echo "  hometale start        # 启动后台守护进程"
+echo "  hometale stop         # 停止守护进程"
+echo "  hometale log --follow # 查看实时日志"
 echo ""
-echo "方式一：使用 CLI（推荐）"
+echo "源码目录: $INSTALL_DIR"
+echo "数据目录: $HOMETALE_DIR"
 echo ""
-echo "1. 运行 CLI 并配置模型："
-echo "   cd $PROJECT_DIR/cli"
-echo "   npm run build"
-echo "   npm link"
-echo "   hometale --config"
-echo ""
-echo "2. 开始聊天："
-echo "   hometale"
-echo ""
-echo "方式二：使用 Web UI"
-echo ""
-echo "1. 配置 API Key（如果还没配置）:"
-echo "   编辑 $CONFIG_FILE"
-echo ""
-echo "2. 启动后端服务（终端 1）:"
-echo "   cd $PROJECT_DIR/server"
-echo "   npm run dev:web"
-echo ""
-echo "3. 启动前端服务（终端 2）:"
-echo "   cd $PROJECT_DIR/web"
-echo "   npm run dev"
-echo ""
-echo "4. 访问应用:"
-echo "   打开浏览器访问 http://localhost:3000"
-echo ""
+echo "如需更新，重新运行此脚本即可。"
 echo "========================================="
