@@ -181,3 +181,374 @@
 | `server/src/agent-core/tools/permissions.ts` | 权限验证错误返回 |
 | `server/src/agent-core/message-handler.ts` | 消息处理错误反馈 |
 | `server/src/websocket/websocket-session.ts` | 错误消息发送 |
+
+---
+
+# 通用 Agent Harness 设计思路
+
+## 设计哲学
+
+错误恢复的核心命题不是"怎么 try/except"，而是构建一套**分类 → 决策 → 恢复 → 补偿 → 降级**的韧性管线。
+
+关键洞察：
+- 很多失败不是"任务真的失败了"，而只是"这一轮需要换一种继续方式"
+- 恢复机制必须有自己的**失败恢复策略**（元恢复），否则恢复本身会成为新的故障源
+- 不同层级的错误（传输层、上下文层、工具层、Agent 层）需要独立的恢复预算和策略
+- 压缩操作本身也会失败，必须有降级路径
+
+---
+
+## 一、错误分类：先分类再恢复
+
+### 1.1 四层错误模型
+
+```
+Layer 1: 传输层错误
+  ├─ 网络超时 / 连接断开
+  ├─ API 限流 / 服务不可用
+  └─ 认证失败（不可恢复）
+
+Layer 2: 上下文层错误
+  ├─ 输出被截断 (max_tokens)
+  ├─ Prompt 太长 (prompt_too_long)
+  └─ 上下文窗口即将耗尽（预防性检测）
+
+Layer 3: 工具层错误
+  ├─ 权限拒绝
+  ├─ 参数校验失败
+  ├─ 执行超时
+  └─ 危险操作拦截
+
+Layer 4: Agent 层错误
+  ├─ Subagent 失败
+  ├─ 压缩操作失败
+  ├─ 状态不一致（会话过期/角色丢失）
+  └─ Doom Loop（同一工具连续失败）
+```
+
+### 1.2 恢复决策器
+
+```python
+def choose_recovery(stop_reason, error_text) -> dict:
+    if stop_reason == "max_tokens":
+        return {"kind": "continue", "reason": "output truncated"}
+
+    if "prompt" in error_text and "long" in error_text:
+        return {"kind": "compact", "reason": "context too large"}
+
+    if any(word in error_text for word in ["timeout", "rate", "unavailable", "connection"]):
+        return {"kind": "backoff", "reason": "transient transport failure"}
+
+    return {"kind": "fail", "reason": "unknown or non-recoverable error"}
+```
+
+**关键原则**：把"错误长什么样"和"接下来怎么做"分开。错误分类是纯判断，恢复动作是纯执行。
+
+---
+
+## 二、恢复预算：每种错误独立计数
+
+### 2.1 独立计数器
+
+```
+recovery_state = {
+    continuation_attempts: 0,   # 续写恢复预算
+    compact_attempts: 0,        # 压缩恢复预算
+    backoff_attempts: 0,        # 退避重试预算
+}
+```
+
+**为什么不共用一个计数器？** 因为不同类型的错误互不影响。一次成功的续写不应该消耗退避预算。一次压缩失败不应该阻止续写尝试。
+
+### 2.2 成功后重置
+
+```
+收到非 max_tokens 的正常响应 → 重置 continuation_attempts
+压缩成功 → 重置 compact_attempts
+API 调用成功 → 重置 backoff_attempts
+```
+
+---
+
+## 三、三条恢复路径
+
+### 3.1 路径 1：输出截断 → 续写
+
+```
+stop_reason == "max_tokens"
+  │
+  ▼ 检查 continuation_attempts < 3
+  │
+  ├─ 是 → 注入续写消息
+  │       "Output limit hit. Continue directly from where you stopped --
+  │        no recap, no repetition. Pick up mid-sentence if needed."
+  │       续续主循环
+  │
+  └─ 否 → 终止，告知用户"输出恢复已耗尽"
+```
+
+**续写提示词的关键**：不能只写"continue"。必须明确告诉模型：
+- 不要重复
+- 不要重新总结
+- 直接从中断点接着写
+
+否则模型经常会重新开头或重复已输出内容。
+
+### 3.2 路径 2：上下文过长 → 压缩再重试
+
+```
+prompt_too_long 错误 / Token 超过阈值
+  │
+  ▼ 触发压缩
+  │
+  ├─ 压缩成功 → 用摘要替换历史 → 重试当前轮次
+  │
+  └─ 压缩失败 → 降级路径（见第五节）
+```
+
+**压缩不是删除历史**，而是把旧对话从原文变成仍然可继续工作的摘要。摘要至少保留：
+- 当前任务是什么
+- 已经做了什么
+- 关键决定是什么
+- 下一步准备做什么
+
+**压缩后必须告诉模型"这是续场"**，否则模型可能重新向用户提问。
+
+### 3.3 路径 3：连接抖动 → 退避重试
+
+```
+transient error (timeout / rate limit / connection)
+  │
+  ▼ 计算退避延迟
+  │   delay = min(base * 2^attempt, max_delay) + random(0, 1)
+  │
+  ├─ attempt < MAX_RETRIES → sleep(delay) → 重试
+  │
+  └─ attempt >= MAX_RETRIES → 终止，告知用户
+```
+
+**指数退避 + 抖动**：`base * 2^attempt + jitter`。抖动防止多个客户端同时重试形成"雷群效应"。
+
+---
+
+## 四、恢复逻辑在主循环中的位置
+
+### 4.1 两个挂载点
+
+```
+主循环
+  │
+  ├─ [挂载点 1：模型调用外层]
+  │   负责：API 报错、网络错误、超时、Prompt 太长
+  │   │
+  │   └─ try { response = callAPI() }
+  │       catch APIError → 判断是否可恢复
+  │       catch ConnectionError → 退避重试
+  │
+  ├─ [挂载点 2：拿到 response 以后]
+  │   负责：max_tokens 截断、正常 tool_use、正常结束
+  │   │
+  │   └─ if (stop_reason == "max_tokens") → 续写恢复
+  │
+  └─ [挂载点 3：工具执行后]
+      负责：主动压缩检查、Doom Loop 检测
+      │
+      └─ if (estimateTokens(messages) > threshold) → 预防性压缩
+```
+
+### 4.2 恢复后的主循环
+
+```
+1. 调用模型
+2. 如果调用报错 → 判断是否可恢复 → 选择恢复路径
+3. 如果拿到响应 → 判断是否被截断 → 续写
+4. 如果需要恢复 → 修改 messages 或等待
+5. 如果不需要恢复 → 进入正常工具分支
+6. 工具执行后 → 检查是否需要预防性压缩
+```
+
+---
+
+## 五、压缩失败的降级链
+
+压缩操作本身也会失败（如用户的单张图片就超过上下文窗口）。必须有独立的降级路径：
+
+### 5.1 熔断器
+
+```
+连续压缩失败 >= N 次（如 3 次）
+  │
+  ▼ 完全停发压缩请求
+  │
+  └─ 接受上下文溢出风险，不再浪费 API 额度
+```
+
+**实测意义**：当用户的单张超级图片本身就超过上下文窗口时，压缩注定失败。不熔断会导致无限循环的失败 API 调用。
+
+### 5.2 PTL 防御（Prompt Too Long Fallback）
+
+即使脱水后，压缩请求仍可能因历史过长而报 PTL 错误：
+
+```
+PTL 错误发生
+  │
+  ▼ 剥洋葱式降级
+  │
+  ├─ 第 1 次重试：裁掉最早 20% 的消息分组
+  ├─ 第 2 次重试：再裁掉 20%
+  └─ 达到最大重试次数 → 返回最精简的可用结果
+      （有损但能解救被锁死的会话）
+```
+
+### 5.3 脱水预处理
+
+交付给 LLM 进行总结之前，先剔除非关键素材，防止总结请求本身 OOM：
+
+```
+原始消息 → 剔除图片/文档附件 → 替换为 [image] 文本占位
+         → 剔除将被重新注入的附件
+         → 脱水后的纯文本 → 送入摘要 LLM
+```
+
+---
+
+## 六、Subagent 错误恢复
+
+### 6.1 Subagent 失败不是主 Agent 失败
+
+```
+主 Agent 派出 Subagent
+  │
+  ├─ Subagent 成功 → 结果回流，继续主流程
+  │
+  └─ Subagent 失败 → 返回 <task-notification status="failed">
+      │
+      └─ 主 Agent 收到失败通知 → 决定是否重试 / 换策略 / 告知用户
+```
+
+**设计原则**：Subagent 的失败是**结构化结果**，不是异常。主 Agent 把它当作一种 tool_result 来处理，而非 try/catch。
+
+### 6.2 Subagent 拓扑约束
+
+```
+Teammate 不能无限嵌套 Teammate
+  │
+  ├─ teammate 不能 spawn 其他 teammate
+  ├─ in-process teammate 不能再启动 background agent
+  │
+  └─ 否则 agent graph 很容易失控
+```
+
+### 6.3 权限桥接的降级
+
+Subagent 的权限请求有两种路径：
+
+```
+优先路径：借用 Leader 的权限 UI
+  │
+  ├─ Leader permission bridge 可用
+  │   → 入队到 Leader 的 ToolUseConfirmQueue
+  │   → 带 workerBadge 标识来源
+  │
+  └─ Leader bridge 不可用
+      → 退回 Mailbox 路径
+      → 发 permission request 给 Leader inbox
+      → 等 Leader response
+      → 应用回 Subagent 上下文
+```
+
+**双轨容灾**：权限机制也做了降级，不是单点依赖。
+
+---
+
+## 七、任务级恢复：失败后 Claim 下一个
+
+在团队协作场景中，teammate 的恢复策略不是"失败了就停下来"：
+
+```
+Teammate 执行循环
+  │
+  ├─ 当前任务成功 → 通知 Leader → Claim 下一个任务
+  │
+  ├─ 当前任务失败 → 通知 Leader → Claim 下一个任务
+  │
+  └─ 无可 Claim 的任务 → 空闲等待
+```
+
+**设计原则**：在团队协作中，单个任务的失败不应阻塞整个团队的工作流。失败信息通过共享任务平面传递，由 Leader 决定后续策略。
+
+---
+
+## 八、Doom Loop 检测
+
+### 8.1 问题
+
+模型可能反复调用同一工具并以相同方式失败，形成死循环：
+```
+read_file("missing.txt") → Error: file not found
+read_file("missing.txt") → Error: file not found
+read_file("missing.txt") → Error: file not found
+...
+```
+
+### 8.2 检测策略
+
+```
+记录最近 N 次工具调用
+  │
+  ├─ 同一工具名 + 相同参数 → 连续失败 M 次
+  │
+  └─ 主动中断 → 返回特殊提示
+      "你已连续 3 次以相同参数调用 {tool_name} 且失败。
+       请换一种策略或告知用户。"
+```
+
+---
+
+## 九、恢复日志：可观测性
+
+### 9.1 标签化日志
+
+```
+[Recovery] continue (1/3)
+[Recovery] compact
+[Recovery] backoff (2/3)
+[Recovery] prompt too long. Compacting...
+[Error] max_tokens recovery exhausted (3 attempts). Stopping.
+[Error] API call failed after 3 retries: rate_limit_error
+[CircuitBreaker] Auto-compact consecutive failures: 3. Halting.
+[PTL] Peeling 20% oldest messages for retry.
+```
+
+### 9.2 恢复指标
+
+| 指标 | 用途 |
+|------|------|
+| 续写恢复触发次数 | 评估 max_tokens 设置是否合理 |
+| 压缩恢复触发次数 | 评估上下文管理策略 |
+| 退避重试触发次数 | 评估 API 稳定性 |
+| 熔断器触发次数 | 评估是否有不可恢复的上下文问题 |
+| Doom Loop 中断次数 | 评估模型决策质量 |
+| 平均恢复延迟 | 评估恢复机制对用户体验的影响 |
+
+---
+
+## 十、机制设计特点总结
+
+| 特性 | 实现方式 | Harness 意义 |
+|------|----------|-------------|
+| 四层错误模型 | 传输/上下文/工具/Agent 层独立分类 | 恢复策略精确匹配错误类型 |
+| 独立恢复预算 | 每种错误类型独立计数 | 防止跨类型预算污染 |
+| 续写提示精确化 | 明确告知"不要重复、不要重头" | 避免模型重复输出 |
+| 压缩后续场声明 | 摘要后告知"这是前文摘要" | 避免模型重新向用户提问 |
+| 熔断器 | 连续失败 N 次后停止压缩 | 防止死循环浪费 API 额度 |
+| PTL 降级 | 剥洋葱式裁剪 + 有损重试 | 解救被锁死的会话 |
+| 脱水预处理 | 剔除图片/重注入附件后再总结 | 防止摘要请求本身 OOM |
+| Subagent 失败结构化 | 失败作为 task-notification 而非异常 | 主 Agent 可理性决策后续动作 |
+| 拓扑约束 | teammate 不能嵌套、不能后台再后台 | 防止 agent graph 失控 |
+| 权限桥接双轨 | Leader UI 优先 + Mailbox 降级 | 权限机制单点容灾 |
+| 任务级恢复 | 失败后 Claim 下一个任务 | 单任务失败不阻塞团队 |
+| Doom Loop 检测 | 同工具同参数连续失败 → 主动中断 | 防止模型陷入重复失败循环 |
+| 退避 + 抖动 | 指数退避 + random jitter | 防止雷群效应 |
+| 预防性压缩 | 工具执行后检查 Token 阈值 | 在出错前主动瘦身 |
+| 标签化日志 | `[Recovery]`/`[Error]`/`[CircuitBreaker]` 前缀 | 恢复过程可观测、可调试 |

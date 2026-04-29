@@ -244,3 +244,247 @@ function cleanupDisclosureManager(sessionId: string)
 - `s05_skill_loading.py` — Anthropic SDK 两层 Skill 加载示例
 - `server/src/skills/discovery.ts` — ProgressiveDisclosure 实现
 - `server/src/skills/loader.ts` — Skill 加载、BUILTIN_EXECUTORS、YAML 解析
+
+---
+
+# 通用 Agent Harness 设计思路
+
+## 设计哲学
+
+Skill 机制的核心命题是：**如何以低门槛方式为 Agent 注入领域能力，同时保证安全边界和运行时可控性。**
+
+关键洞察：
+- Skill 不是代码插件，而是**结构化知识 + 可选执行逻辑**的组合
+- 知识注入应按需加载，而非全量塞入上下文
+- 不同来源的 Skill 具有不同信任等级，安全策略必须分级
+
+---
+
+## 一、多来源发现与优先级合并
+
+### 1.1 三种来源
+
+| 来源 | 信任等级 | 典型路径 | 特点 |
+|------|----------|----------|------|
+| **策略级** | 最高 | 管理员统一配置 | 组织级强制技能 |
+| **用户级** | 高 | `~/.config/agent/skills/` | 用户个人偏好 |
+| **项目级** | 中 | `.agent/skills/` | 项目特定工作流 |
+| **协议映射** | 低 | 外部 MCP/Plugin Server | 远程动态能力 |
+
+### 1.2 发现策略
+
+```
+并行扫描所有来源目录
+  │
+  ▼ Promise.all 并发
+  │
+  ├─ 策略级目录
+  ├─ 用户级目录
+  ├─ 项目级目录（向上爬取至根目录）
+  └─ 扩展目录（--add-dir 显式指定）
+  │
+  ▼
+合并 + 去重（inode 级别，防止软链接重复加载）
+  │
+  ▼
+统一为 Command 对象
+```
+
+**关键设计**：
+- `memoize` 包裹发现函数，同一工作目录只扫描一次
+- `fs.realpath` 取 inode 真实路径去重，防止软链接导致重复加载
+- 内置技能优先级高于扩展技能，同名覆盖时内置优先
+
+---
+
+## 二、Frontmatter 元数据：技能的声明式协议
+
+每个 Skill 的 YAML 前置数据不仅是描述，更是**声明式运行时协议**：
+
+```yaml
+---
+name: git-workflow
+description: Git 工作流辅助
+when_to_use: 当用户需要提交代码、创建分支、解决冲突时
+allowed_tools: [bash, read_file, edit_file]  # 限制技能可使用的工具
+model: sonnet         # 绑定特定模型
+effort: high          # 任务估时级别
+user_invocable: true  # 是否出现在用户命令列表
+paths:                # 条件技能：文件变更时自动激活
+  - "src/**/*.ts"
+  - "*.test.*"
+context: inline       # inline | fork（上下文注入方式）
+---
+```
+
+### 关键字段解读
+
+| 字段 | 作用 | Harness 意义 |
+|------|------|-------------|
+| `paths` | 条件触发路径 | 精准激活，避免认知过载 |
+| `allowed_tools` | 工具白名单 | 最小权限原则，限制技能可调用的工具 |
+| `user_invocable` | 可见性控制 | `false` = 仅供模型内部调用，不暴露给用户 |
+| `context` | 注入方式 | `inline` 在当前对话流注入，`fork` 在隔离上下文执行 |
+| `model` | 模型绑定 | 不同技能可绑定不同能力的模型（成本优化） |
+
+---
+
+## 三、Prompt 内嵌 Shell 执行：实时上下文注入
+
+### 3.1 机制
+
+Markdown 内容中可嵌入 Shell 命令，在技能被调用前先在宿主机执行，输出结果替换回正文：
+
+```markdown
+当前分支信息：
+!`git log --oneline -5`
+
+未提交的变更：
+!`git status --short`
+
+请根据以上信息帮我分析当前代码状态。
+```
+
+支持两种语法：
+- **内联**：`` !`command` `` — 单行输出
+- **代码块**：`` ```!\ncommand\n``` `` — 多行输出
+
+### 3.2 安全切断
+
+```
+技能来源判断
+  │
+  ├─ 本地文件系统 / 内置 ──→ 允许执行 Shell（受信任）
+  │                           │
+  │                           └─ 走统一权限系统检查
+  │
+  └─ 外部协议映射 (MCP/Plugin) ──→ 跳过 Shell 执行（不信任）
+                                     │
+                                     └─ 直接返回原始 Markdown
+```
+
+**这是最关键的安全边界**：来自远程服务器的技能不执行内嵌 Shell，防止恶意远程注入 RCE 攻击。所有命令执行前都走 `hasPermissionsToUseTool`，遵从同一套权限体系。
+
+### 3.3 Harness 意义
+
+这一机制让 Skill Prompt 携带**实时系统状态**，而非静态文本。模型获取的上下文是调用时刻的真实快照，而非编写时的陈旧信息。
+
+---
+
+## 四、条件技能：文件变更驱动的自动激活
+
+`paths` 字段声明了 glob pattern，当用户操作匹配的文件时，技能自动激活并注入上下文：
+
+```
+用户编辑 src/auth/login.ts
+  │
+  ▼ 匹配 paths: ["src/**/*.ts"]
+  │
+  ▼ 自动激活 "typescript-best-practices" 技能
+  │
+  ▼ 技能内容注入模型上下文
+  │
+  ▼ 模型在后续生成中自动遵循该技能的规范
+```
+
+**设计要点**：
+- 不是所有 Skill 都需要条件触发，只有声明了 `paths` 的才是条件技能
+- 这是一种**精准触发的 Hook 订阅模式**，避免无关技能污染上下文
+- 条件激活与两层加载可以叠加：条件触发后仍按需加载 body
+
+---
+
+## 五、两层加载 + ProgressiveDisclosure：三级上下文控制
+
+```
+Level 0: 不激活
+  │  技能完全不可见，不注册工具，不占 token
+  │
+  ▼ 条件触发 / 用户调用
+  │
+Level 1: 名称+描述（System Prompt，~100 token/skill）
+  │  模型知道技能存在，可以选择调用
+  │
+  ▼ 模型调用 load_skill
+  │
+Level 2: 完整 body（tool_result，~2000 token/skill）
+  │  模型获取详细工作流、参数指南、注意事项
+  │
+  ▼ 模型调用具体 Skill 工具
+  │
+Level 3: 执行（skill.execute()）
+   真正产生副作用
+```
+
+### 为什么需要三级
+
+| 级别 | Token 成本 | 模型决策 | 适用场景 |
+|------|-----------|---------|---------|
+| Level 0 | 0 | 无 | 与当前任务无关 |
+| Level 1 | ~100/skill | "我知道有这个能力" | 列出可选项 |
+| Level 2 | ~2000/skill | "我知道具体怎么做" | 执行前获取指南 |
+| Level 3 | 视业务而定 | "我开始行动" | 产生实际效果 |
+
+10 个 Skill 的成本对比：
+- **全量 Level 2**：20,000 token/轮，大部分无用
+- **三级控制**：~1,000 (L1) + 按需 2-3 个 L2 = ~7,000 token
+
+---
+
+## 六、执行器分层：内置 vs 自定义
+
+```
+技能执行器
+  │
+  ├─ 内置 Executor（代码中硬编码）
+  │   ├── 安全：经过审计，无动态 import 风险
+  │   ├── 性能：无文件系统 I/O 开销
+  │   └── 典型：get_current_time, calculate, load_skill
+  │
+  └─ 自定义 Executor（executor.js 动态 import）
+      ├── 灵活：用户可扩展任意逻辑
+      ├── 风险：未审计代码，需沙箱隔离
+      └── 典型：领域特定 API 调用、复杂工作流
+```
+
+**优先级**：内置 > 自定义。内置技能不需要文件系统上的 `executor.js`，减少 I/O 和攻击面。
+
+`load_skill` 作为**元工具**始终注册，不受白名单过滤——它是两级加载的入口，必须永远可用。
+
+---
+
+## 七、Session 级状态管理
+
+Skill 披露状态是 session 级的：
+
+```
+Session 开始
+  │
+  ▼ 创建 ProgressiveDisclosure 实例
+  │
+  ▼ 用户消息 → 关键词匹配 → 披露相关 Skill
+  │
+  ▼ 已披露的 Skill 不会"收回"（单调递增）
+  │
+  ▼ Session 结束 → 清理实例，防止内存泄漏
+```
+
+**设计原则**：
+- 披露是单调递增的：已暴露的技能不再收回，避免模型上下文断裂
+- 状态绑定到 session 而非全局：不同会话独立计算
+- 必须有清理机制：`cleanupDisclosureManager(sessionId)` 防止长期运行的进程泄漏
+
+---
+
+## 八、机制设计特点总结
+
+| 特性 | 实现方式 | Harness 意义 |
+|------|----------|-------------|
+| 低门槛扩展 | Markdown + YAML + 可选 Shell | 非程序员也能创建技能 |
+| 实时系统上下文 | Prompt 内嵌 Shell 执行 | 技能携带调用时刻的真实状态 |
+| 条件精准触发 | `paths` 字段订阅文件变更 | 避免无关技能污染上下文 |
+| 三级上下文控制 | L0 不激活 → L1 描述 → L2 完整内容 | Token 成本随需增长 |
+| 安全隔离 | 远程来源跳过 Shell，统一权限体系 | 防止 RCE 和权限逃逸 |
+| 统一协议 | 所有来源最终归约为 Command 对象 | 内置/扩展/远程技能平级消费 |
+| 最小权限 | `allowed_tools` 限制技能可调用工具 | 技能只能使用声明的工具 |
+| Session 作用域 | 披露状态随 Session 生灭 | 隔离性 + 无泄漏 |
