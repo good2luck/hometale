@@ -19,7 +19,9 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       
       - name: Install dependencies
-        run: npm ci
+        run: |
+          # Use npm install to handle platform-specific optional dependencies
+          npm install
       
       - name: Build all packages
         run: |
