@@ -21,11 +21,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
-      - name: Build
-        run: npm run build
+      - name: Build all packages
+        run: |
+          # Build server first (dependency of cli)
+          cd server && npm run build
+          cd ..
+          # Build web
+          cd web && npm run build
+          cd ..
+          # Build cli last
+          cd cli && npm run build
       
-      - name: Pack
-        run: npm run pack
+      - name: Pack CLI
+        run: |
+          # Copy server build to cli
+          mkdir -p cli/dist/server
+          cp -r server/dist/* cli/dist/server/
+          # Copy static assets
+          mkdir -p cli/dist/static
+          cp -r server/static/* cli/dist/static/ 2>/dev/null || true
+          # Rewrite imports
+          find cli/dist -maxdepth 1 -name '*.js' -exec sed -i "s|from '@hometale/server'|from './server/index.js'|g" {} +
+          find cli/dist -maxdepth 1 -name '*.js' -exec sed -i 's|from "@hometale/server"|from "./server/index.js"|g' {} +
+          find cli/dist -mindepth 2 -name '*.js' -exec sed -i "s|from '@hometale/server'|from '../server/index.js'|g" {} +
+          find cli/dist -mindepth 2 -name '*.js' -exec sed -i 's|from "@hometale/server"|from "../server/index.js"|g' {} +
+          # Pack
+          cd cli && npm pack
       
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/v')
